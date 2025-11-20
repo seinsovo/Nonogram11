@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>数织游戏 (Nonogram)</title>
+    <style>
+        :root {
+            --cell-size: 30px;
+            --border-color: #333;
+            --filled-color: #2c3e50;
+            --x-color: #e74c3c;
+            --bg-color: #f4f4f4;
+            --highlight-color: #e0e0e0;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background-color: var(--bg-color);
+            color: #333;
+            margin: 0;
+            padding: 20px;
+            user-select: none; /* 防止拖拽时选中文本 */
+        }
+
+        h1 { margin-bottom: 10px; }
+
+        .controls {
+            margin-bottom: 20px;
+            display: flex;
+            gap: 10px;
+        }
+
+        button {
+            padding: 8px 16px;
+            font-size: 14px;
+            cursor: pointer;
+            background-color: white;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            transition: background 0.2s;
+        }
+
+        button:hover { background-color: #eee; }
+        button.active { background-color: var(--filled-color); color: white; border-color: var(--filled-color); }
+
+        /* 游戏容器布局 */
+        .game-container {
+            display: grid;
+            /* grid-template-columns will be set by JS based on size */
+            gap: 1px;
+            background-color: #999; /* 网格线颜色 */
+            border: 2px solid var(--border-color);
+            padding: 2px;
+        }
+
+        /* 单元格通用样式 */
+        .cell, .header-col, .header-row {
+            background-color: white;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 12px;
+            box-sizing: border-box;
+        }
+
+        /* 提示数字区域 */
+        .header-col {
+            flex-direction: column;
+            justify-content: flex-end;
+            padding-bottom: 4px;
+            background-color: #e8e8e8;
+            font-weight: bold;
+            line-height: 1.2;
+            white-space: pre-wrap; 
+        }
+
+        .header-row {
+            flex-direction: row;
+            justify-content: flex-end;
+            padding-right: 8px;
+            background-color: #e8e8e8;
+            font-weight: bold;
+            letter-spacing: 4px;
+        }
+
+        /* 游戏格子 */
+        .cell {
+            width: var(--cell-size);
+            height: var(--cell-size);
+            cursor: pointer;
+            transition: background-color 0.1s;
+        }
+
+        .cell:hover { background-color: var(--highlight-color); }
+
+        /* 状态样式 */
+        .cell.filled { background-color: var(--filled-color); }
+        
+        .cell.crossed::after {
+            content: "×";
+            font-size: 24px;
+            color: var(--x-color);
+            line-height: 0;
+        }
+
+        /* 每5格加粗边框 (辅助线) */
+        .thick-right { border-right: 2px solid var(--border-color) !important; }
+        .thick-bottom { border-bottom: 2px solid var(--border-color) !important; }
+
+        .status {
+            margin-top: 20px;
+            font-size: 18px;
+            font-weight: bold;
+            height: 24px;
+        }
+        
+        .win { color: #27ae60; }
+
+    </style>
+</head>
+<body>
+
+    <h1>数织 (Nonogram)</h1>
+    
+    <div class="controls">
+        <button onclick="initGame(5)">5x5 (简单)</button>
+        <button onclick="initGame(10)" class="active">10x10 (普通)</button>
+        <button onclick="initGame(15)">15x15 (困难)</button>
+        <button onclick="checkWin(true)">检查答案</button>
+    </div>
+
+    <div id="gameBoard" class="game-container"></div>
+    <div id="statusMessage" class="status"></div>
+
+    <div style="margin-top: 15px; font-size: 0.9em; color: #666;">
+        <p>操作说明：<b>左键拖拽</b>填色，<b>右键拖拽</b>标记叉号。</p>
+    </div>
+
+    <script>
+        let gridSize = 10;
+        let solution = [];
+        let playerGrid = [];
+        let isDragging = false;
+        let dragType = null; // 'fill' or 'cross' or 'clear'
+        
+        const board = document.getElementById('gameBoard');
+        const statusMsg = document.getElementById('statusMessage');
+
+        // 初始化游戏
+        function initGame(size) {
+            gridSize = size;
+            statusMsg.innerText = "";
+            statusMsg.className = "status";
+            
+            // 更新按钮状态
+            document.querySelectorAll('.controls button').forEach(btn => {
+                // --- 修改开始 ---
+                // 使用 parseInt 提取按钮文字开头的数字（例如 "15x15" 提取出 15）
+                // 然后和当前的 size 进行精确比较
+                if(parseInt(btn.innerText) === size) {
+                    btn.classList.add('active');
+                } else {
+                    btn.classList.remove('active');
+                }
+                // --- 修改结束 ---
+            });
+
+            generateSolution();
+            playerGrid = Array(size).fill().map(() => Array(size).fill(0));
+            renderBoard();
+        }
+
+        // 生成随机谜题
+        function generateSolution() {
+            solution = [];
+            for (let i = 0; i < gridSize; i++) {
+                let row = [];
+                for (let j = 0; j < gridSize; j++) {
+                    // 约 55% 的概率填色，避免太稀疏或太满
+                    row.push(Math.random() > 0.45 ? 1 : 0);
+                }
+                solution.push(row);
+            }
+            // 确保不是空盘
+            if (solution.every(row => row.every(cell => cell === 0))) {
+                solution[0][0] = 1; 
+            }
+        }
+
+        // 计算行列提示
+        function calculateHints(arr) {
+            let hints = [];
+            let count = 0;
+            for (let val of arr) {
+                if (val === 1) {
+                    count++;
+                } else if (count > 0) {
+                    hints.push(count);
+                    count = 0;
+                }
+            }
+            if (count > 0) hints.push(count);
+            return hints.length > 0 ? hints : [0];
+        }
+
+        // 渲染游戏面板
+        function renderBoard() {
+            board.innerHTML = '';
+            
+            // 设置 CSS Grid 布局：1列给行提示，N列给格子
+            board.style.gridTemplateColumns = `auto repeat(${gridSize}, var(--cell-size))`;
+
+            // 1. 渲染左上角空白块
+            const emptyCorner = document.createElement('div');
+            emptyCorner.className = 'header-row';
+            emptyCorner.style.background = '#ddd';
+            board.appendChild(emptyCorner);
+
+            // 2. 渲染顶部列提示
+            for (let c = 0; c < gridSize; c++) {
+                let colData = solution.map(row => row[c]);
+                let hints = calculateHints(colData);
+                const th = document.createElement('div');
+                th.className = 'header-col';
+                // 将数字竖向排列
+                th.innerHTML = hints.join('<br>'); 
+                if ((c + 1) % 5 === 0 && c !== gridSize - 1) th.classList.add('thick-right');
+                board.appendChild(th);
+            }
+
+            // 3. 渲染行提示 和 游戏格子
+            for (let r = 0; r < gridSize; r++) {
+                // 行提示
+                let rowData = solution[r];
+                let hints = calculateHints(rowData);
+                const rh = document.createElement('div');
+                rh.className = 'header-row';
+                rh.innerText = hints.join(' ');
+                if ((r + 1) % 5 === 0 && r !== gridSize - 1) rh.classList.add('thick-bottom');
+                board.appendChild(rh);
+
+                // 游戏格子
+                for (let c = 0; c < gridSize; c++) {
+                    const cell = document.createElement('div');
+                    cell.className = 'cell';
+                    cell.dataset.r = r;
+                    cell.dataset.c = c;
+
+                    // 5格分割线样式
+                    if ((c + 1) % 5 === 0 && c !== gridSize - 1) cell.classList.add('thick-right');
+                    if ((r + 1) % 5 === 0 && r !== gridSize - 1) cell.classList.add('thick-bottom');
+
+                    // 鼠标事件
+                    cell.addEventListener('mousedown', handleMouseDown);
+                    cell.addEventListener('mouseenter', handleMouseEnter);
+                    // 禁用右键菜单
+                    cell.addEventListener('contextmenu', (e) => e.preventDefault());
+
+                    board.appendChild(cell);
+                }
+            }
+        }
+
+        // 处理鼠标交互
+        function handleMouseDown(e) {
+            e.preventDefault(); // 防止默认拖拽行为
+            isDragging = true;
+            const r = parseInt(e.target.dataset.r);
+            const c = parseInt(e.target.dataset.c);
+            
+            // 确定操作类型：左键(0)填色，右键(2)打叉
+            // 逻辑：如果点的格子已经是当前颜色，则变为擦除模式
+            const isRightClick = e.button === 2;
+            const currentVal = playerGrid[r][c];
+            
+            if (isRightClick) {
+                dragType = (currentVal === 2) ? 0 : 2; // 0是清除, 2是X
+            } else {
+                dragType = (currentVal === 1) ? 0 : 1; // 0是清除, 1是填色
+            }
+
+            updateCell(r, c);
+        }
+
+        function handleMouseEnter(e) {
+            if (!isDragging) return;
+            const r = parseInt(e.target.dataset.r);
+            const c = parseInt(e.target.dataset.c);
+            updateCell(r, c);
+        }
+
+        function updateCell(r, c) {
+            if (isNaN(r) || isNaN(c)) return;
+            
+            // 更新逻辑数据
+            playerGrid[r][c] = dragType;
+
+            // 更新视觉
+            // 找到对应的DOM元素 (注意：grid布局中子元素索引会有偏移)
+            // Header占了 (gridSize + 1) 个，之后每行第一个是Hint
+            // 计算较为复杂，不如直接Query
+            const cell = document.querySelector(`.cell[data-r='${r}'][data-c='${c}']`);
+            
+            cell.classList.remove('filled', 'crossed');
+            if (dragType === 1) cell.classList.add('filled');
+            if (dragType === 2) cell.classList.add('crossed');
+            
+            // 实时简单检查（可选，这里仅作为示例，不自动判定）
+            checkWin(false); 
+        }
+
+        // 全局松开鼠标
+        document.addEventListener('mouseup', () => {
+            isDragging = false;
+            dragType = null;
+        });
+
+        // 检查胜利
+        function checkWin(showError) {
+            let isCorrect = true;
+            let isComplete = true;
+
+            for (let r = 0; r < gridSize; r++) {
+                for (let c = 0; c < gridSize; c++) {
+                    const pVal = playerGrid[r][c] === 1 ? 1 : 0; // 玩家的X(2)等同于0
+                    const sVal = solution[r][c];
+
+                    if (pVal !== sVal) {
+                        isCorrect = false;
+                        // 如果是“检查答案”模式，且玩家填了色但填错了，可以标记一下（这里暂不实现复杂错误提示）
+                    }
+                }
+            }
+
+            if (isCorrect) {
+                statusMsg.innerText = "恭喜！你完成了谜题！🎉";
+                statusMsg.classList.add('win');
+            } else {
+                statusMsg.classList.remove('win');
+                if (showError) {
+                    statusMsg.innerText = "还没对哦，再检查一下吧。";
+                } else {
+                    statusMsg.innerText = "";
+                }
+            }
+        }
+
+        // 启动默认游戏
+        initGame(10);
+
+    </script>
+</body>
+</html>
